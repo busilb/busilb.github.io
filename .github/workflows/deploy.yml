@@ -19,8 +19,36 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           gh release download --repo "$GITHUB_REPOSITORY" --pattern 'site-g4.tar.gz' --dir .
           mkdir _site && tar -xzf site-g4.tar.gz -C _site
+      - name: 下载媒体包（音频/插图）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # 站点包里没有 audio-pack.json，说明是分包改造之前的老包（音频已内含）——
+          # 回滚到老版本时就是这条路径，保持原样直接部署。
+          if [ ! -f _site/audio-pack.json ]; then
+            echo "老格式站点包（媒体已内含），跳过媒体包下载"
+            exit 0
+          fi
+          cat _site/audio-pack.json
+          # 新格式带 packs 数组（可能有 audio、story-images 多个）；
+          # 只有 tag/asset 两个字段的旧格式按单个音频包处理。
+          jq -r 'if (.packs // []) | length > 0
+                 then .packs[] | "\(.tag // "audio-packs")\t\(.asset)\t\(.dir // "audio")"
+                 else "\(.tag)\t\(.asset)\taudio" end' _site/audio-pack.json > packs.tsv
+          mkdir -p packs
+          while IFS=$'\t' read -r tag asset dir; do
+            [ -n "$asset" ] || continue
+            echo "→ $tag / $asset → _site/$dir"
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern "$asset" --dir packs
+            mkdir -p "_site/$dir"
+            tar -xf "packs/$asset" -C "_site/$dir"
+          done < packs.tsv
+          rm -rf packs _site/audio-pack.json
+          du -sh _site
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
